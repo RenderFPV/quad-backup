@@ -18,6 +18,14 @@ Other things it does:
 - **Reboots aren't plug-ins:** if the FC reboots after you hit Save, it isn't backed up again.
 - **New FC, same quad:** if you replace an FC and keep the craft name, the window offers that drone's existing folder.
 
+## ★ Special backups
+
+Nailed a tune you never want to lose? Hit **★ Special backup**. It's in the Hangar, on a plugged-in drone's card, and in the tray menu. Give it a name like `locked in freestyle`.
+
+- **If Betaflight isn't connected,** it's saved right away.
+- **If you're mid-tune and connected,** it's ready and waiting. Hit **Save** in Betaflight, then **Disconnect**, and it's saved under your name. The drone's card shows that it's waiting. If you unplug instead, your next plug-in uses the name.
+- **Special backups are always kept,** even if nothing changed. They're easy to spot in the folder, for example `ERA_2026-10-19_14-32-05_SPECIAL_locked in freestyle.txt`, and each drone's card shows how many it has.
+
 ## Restoring a backup
 
 Flash the **same Betaflight version** as the backup. The version is shown in the second line of the file. Then go to the CLI tab, paste the whole file, and type `save`.

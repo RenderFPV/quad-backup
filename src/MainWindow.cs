@@ -322,25 +322,40 @@ namespace QuadBackup
         const float W = 440;
         readonly float S;
         readonly string title, message;
-        readonly bool danger;
+        readonly bool danger, special;
         readonly InputBox input;
         readonly Timer timer = new Timer { Interval = 33 };
+        readonly Stopwatch clock = Stopwatch.StartNew();
         readonly float messageH;
         float propAngle;
         bool ok;
 
         public static string Prompt(IWin32Window owner, string title, string message, string initial, string okText)
         {
-            using (var d = new ThemedDialog(title, message, initial, okText, "Cancel", false))
+            using (var d = new ThemedDialog(title, message, initial, okText, "Cancel", false, false, owner))
             {
                 d.ShowDialog(owner);
                 return d.ok ? d.input.Box.Text.Trim() : null;
             }
         }
 
+        // Asks what to call a special backup. Returns null if cancelled.
+        public static string PromptSpecial(IWin32Window owner, string droneName)
+        {
+            using (var d = new ThemedDialog("★ Special backup" + (droneName != null ? " for " + droneName : ""),
+                "Name this one so you can find it later, like \"locked in freestyle\" or \"before new props\". It's kept even if nothing changed.",
+                "", "★ Save it", "Cancel", false, true, owner))
+            {
+                d.ShowDialog(owner);
+                if (!d.ok) return null;
+                var name = d.input.Box.Text.Trim();
+                return name.Length > 0 ? name : "special";
+            }
+        }
+
         public static bool Confirm(IWin32Window owner, string title, string message, string okText, bool danger)
         {
-            using (var d = new ThemedDialog(title, message, null, okText, "Cancel", danger))
+            using (var d = new ThemedDialog(title, message, null, okText, "Cancel", danger, false, owner))
             {
                 d.ShowDialog(owner);
                 return d.ok;
@@ -349,18 +364,20 @@ namespace QuadBackup
 
         public static void Alert(IWin32Window owner, string title, string message)
         {
-            using (var d = new ThemedDialog(title, message, null, "Got it", null, true)) d.ShowDialog(owner);
+            using (var d = new ThemedDialog(title, message, null, "Got it", null, true, false, owner)) d.ShowDialog(owner);
         }
 
-        ThemedDialog(string title, string message, string initial, string okText, string cancelText, bool danger)
+        ThemedDialog(string title, string message, string initial, string okText, string cancelText, bool danger, bool special, IWin32Window owner)
         {
             this.title = title;
             this.message = message;
             this.danger = danger;
+            this.special = special;
             using (var g = CreateGraphics()) S = g.DpiX / 96f;
             Text = title;
             FormBorderStyle = FormBorderStyle.None;
-            StartPosition = FormStartPosition.CenterParent;
+            // from the tray there's no window to centre on
+            StartPosition = owner != null ? FormStartPosition.CenterParent : FormStartPosition.CenterScreen;
             AutoScaleMode = AutoScaleMode.None;
             ShowInTaskbar = false;
             KeyPreview = true;
@@ -378,7 +395,7 @@ namespace QuadBackup
                 Controls.Add(input);
                 y += 58;
             }
-            var okButton = new PillButton { Primary = true, Text = okText, Font = Fonts.Button, BackColor = Theme.Panel, Bounds = Rectangle.Round(R(W - 24 - 132, y, 132, 42)) };
+            var okButton = new PillButton { Primary = !special, Special = special, Text = okText, Font = Fonts.Button, BackColor = Theme.Panel, Bounds = Rectangle.Round(R(W - 24 - 132, y, 132, 42)) };
             okButton.Click += (o, e) => { ok = true; Close(); };
             Controls.Add(okButton);
             AcceptButton = okButton;
@@ -403,7 +420,16 @@ namespace QuadBackup
 
         internal static Form CreateForPreview(string title, string message, string initial, bool danger)
         {
-            return new ThemedDialog(title, message, initial, initial != null ? "Rename" : "Forget it", "Cancel", danger);
+            return new ThemedDialog(title, message, initial, initial != null ? "Rename" : "Forget it", "Cancel", danger, false, null);
+        }
+
+        internal static Form CreateSpecialForPreview(string droneName)
+        {
+            var d = new ThemedDialog("★ Special backup for " + droneName,
+                "Name this one so you can find it later, like \"locked in freestyle\" or \"before new props\". It's kept even if nothing changed.",
+                "", "★ Save it", "Cancel", false, true, null);
+            d.input.Box.Text = "locked in freestyle";
+            return d;
         }
 
         protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); Native.RoundCorners(Handle, Theme.Line); }
@@ -415,7 +441,9 @@ namespace QuadBackup
         {
             var g = e.Graphics;
             g.Clear(Theme.Panel);
-            QuadArt.Draw(g, 46 * S, 48 * S, 58 * S, propAngle, danger ? 14 : -6, 0, true, danger ? Theme.Pink : Theme.Sky, false);
+            var bodyColor = special ? Theme.Hex(0xFFC93C) : (danger ? Theme.Pink : Theme.Sky);
+            QuadArt.Draw(g, 46 * S, 48 * S, 58 * S, propAngle, danger ? 14 : -6, 0, true, bodyColor, false);
+            if (special) QuadArt.Sparkles(g, new PointF(46 * S, 48 * S), 30 * S, clock.ElapsedMilliseconds / 1000f, S);
             Theme.DrawText(g, title, Fonts.DialogTitle, R(88, 22, W - 112, 30), Theme.Text, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
             Theme.DrawText(g, message, Fonts.Body, R(88, 56, W - 112, messageH + 4), Theme.Muted, TextFormatFlags.WordBreak);
         }
@@ -427,23 +455,32 @@ namespace QuadBackup
     {
         public readonly Drone Drone;
         public event Action<DroneCard, string> ActionClicked;
-        readonly int backups;
+        readonly int backups, specials;
         readonly DateTime? last;
-        readonly bool folderMissing;
+        readonly bool folderMissing, pluggedIn;
+        readonly string pendingSpecial;
         readonly Color color;
         readonly List<KeyValuePair<string, RectangleF>> links = new List<KeyValuePair<string, RectangleF>>();
         string hover;
         bool hot;
 
-        public DroneCard(Drone d, float s) : base(s)
+        public DroneCard(Drone d, float s, bool pluggedIn, string pendingSpecial) : base(s)
         {
             Drone = d;
-            Height = (int)(116 * s);
+            this.pluggedIn = pluggedIn;
+            this.pendingSpecial = pendingSpecial;
+            Height = (int)((pendingSpecial != null ? 140 : 116) * s);
             Margin = new Padding(0, 0, 0, (int)(12 * s));
             folderMissing = string.IsNullOrEmpty(d.Folder) || !Directory.Exists(d.Folder);
             if (!folderMissing)
             {
-                try { backups = Directory.GetFiles(d.Folder, "*.txt").Length; } catch { }
+                try
+                {
+                    var files = Directory.GetFiles(d.Folder, "*.txt");
+                    backups = files.Length;
+                    specials = files.Count(f => Path.GetFileName(f).Contains(BackupFiles.SpecialTag));
+                }
+                catch { }
             }
             last = MainWindow.ParseTime(d.LastBackup);
             color = MainWindow.ColorFor(d.FcId ?? d.Name ?? "");
@@ -519,25 +556,53 @@ namespace QuadBackup
             var rf = TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine;
             Theme.DrawText(g, "last backup", Fonts.Small, new RectangleF(right.X, 14 * S, rightW, 18 * S), Theme.Muted, rf);
             Theme.DrawText(g, last.HasValue ? MainWindow.Ago(last.Value) : "never", Fonts.BodyBold, new RectangleF(right.X, 32 * S, rightW, 24 * S), Theme.Text, rf);
-            Theme.DrawText(g, backups == 1 ? "1 backup" : backups + " backups", Fonts.Small, new RectangleF(right.X, 56 * S, rightW, 18 * S), Theme.Muted, rf);
+            var count = backups == 1 ? "1 backup" : backups + " backups";
+            if (specials > 0)
+            {
+                // "12 backups  ·  ★ 2 special", with the special part in gold
+                var star = "★ " + specials + " special";
+                float sw = Theme.Measure(g, star, Fonts.Small);
+                Theme.DrawText(g, star, Fonts.Small, new RectangleF(right.X, 56 * S, rightW, 18 * S), Theme.Hex(0xFFC93C), rf);
+                count += "  ·  ";
+                Theme.DrawText(g, count, Fonts.Small, new RectangleF(right.X, 56 * S, rightW - sw, 18 * S), Theme.Muted, rf);
+            }
+            else Theme.DrawText(g, count, Fonts.Small, new RectangleF(right.X, 56 * S, rightW, 18 * S), Theme.Muted, rf);
+
+            float ly = 80 * S;
+            if (pendingSpecial != null)
+            {
+                // waiting on Betaflight to let go before the special backup can happen
+                var note = new RectangleF(x, 74 * S, Width - x - 18 * S, 26 * S);
+                using (var path = Theme.Round(note, note.Height / 2))
+                using (var b = new SolidBrush(Theme.Alpha(Theme.Hex(0xFFC93C), 34)))
+                    g.FillPath(b, path);
+                Theme.DrawText(g, "★  \"" + pendingSpecial + "\" is ready: disconnect in Betaflight and I'll save it",
+                               Fonts.SmallBold, new RectangleF(note.X + 12 * S, note.Y, note.Width - 24 * S, note.Height), Theme.Hex(0xFFD86B),
+                               TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+                ly = 106 * S;
+            }
 
             links.Clear();
-            var items = new List<KeyValuePair<string, string>>
+            var items = new List<KeyValuePair<string, string>>();
+            if (pluggedIn && !Drone.Ignored) items.Add(new KeyValuePair<string, string>("special", "★ Special backup"));
+            items.AddRange(new[]
             {
                 new KeyValuePair<string, string>("open", "Open folder"),
                 new KeyValuePair<string, string>("rename", "Rename"),
                 new KeyValuePair<string, string>("move", "Change folder"),
                 new KeyValuePair<string, string>("pause", Drone.Ignored ? "Resume backups" : "Pause backups"),
                 new KeyValuePair<string, string>("forget", "Forget")
-            };
-            float lx = x, ly = 80 * S;
+            });
+            float lx = x;
             foreach (var item in items)
             {
                 bool isHover = hover == item.Key;
                 float w = Theme.Measure(g, item.Value, Fonts.SmallBold);
                 var lr = new RectangleF(lx, ly, w, 20 * S);
                 links.Add(new KeyValuePair<string, RectangleF>(item.Key, RectangleF.Inflate(lr, 4 * S, 3 * S)));
-                var c = isHover ? Theme.Text : (item.Key == "forget" ? Theme.Alpha(Theme.Pink, 220) : Theme.Sky);
+                var c = isHover ? Theme.Text
+                    : item.Key == "forget" ? Theme.Alpha(Theme.Pink, 220)
+                    : item.Key == "special" ? Theme.Hex(0xFFC93C) : Theme.Sky;
                 using (var f = new Font(Fonts.SmallBold, isHover ? FontStyle.Bold | FontStyle.Underline : FontStyle.Bold))
                     Theme.DrawText(g, item.Value, f, lr, c, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
                 lx += w + 22 * S;
@@ -566,6 +631,16 @@ namespace QuadBackup
 
     // ------------------------------------------------------------------------------------------------ the main window
 
+    // What the window needs from the running app (implemented by the tray app).
+    public interface IHangarHost
+    {
+        void BackupNow();
+        void SettingsChanged();
+        void SpecialBackup(IWin32Window owner, string fcId); // fcId null = whichever quad is plugged in
+        string PendingSpecial(string fcId);                  // name of a special backup waiting for a disconnect, or null
+        bool IsPluggedIn(string fcId);
+    }
+
     public class MainWindow : Form
     {
         public enum Page { Hangar, Settings, Log }
@@ -574,7 +649,7 @@ namespace QuadBackup
         static readonly Color[] DroneColors = { Theme.Sky, Theme.Mint, Theme.Pink, Theme.Amber, Theme.Violet, Theme.Coral };
 
         readonly float S;
-        readonly Action backupNow, settingsChanged;
+        readonly IHangarHost host;
         readonly Timer anim = new Timer { Interval = 33 };
         readonly Timer refreshTimer = new Timer { Interval = 2000 };
         readonly Stopwatch clock = Stopwatch.StartNew();
@@ -594,10 +669,9 @@ namespace QuadBackup
         RichTextBox logBox;
         Segmented logFilter;
 
-        public MainWindow(Action backupNow, Action settingsChanged)
+        public MainWindow(IHangarHost host)
         {
-            this.backupNow = backupNow;
-            this.settingsChanged = settingsChanged;
+            this.host = host;
             using (var g = CreateGraphics()) S = g.DpiX / 96f;
 
             Text = "Quad Backup";
@@ -718,12 +792,15 @@ namespace QuadBackup
         {
             var p = new Panel { BackColor = Theme.Bg };
             p.Controls.Add(new Label { Text = "Your fleet", Font = Fonts.Heading, ForeColor = Theme.Text, BackColor = Theme.Bg, AutoSize = true, Location = Pt(22, 0) });
-            fleetSummary = new Label { Font = Fonts.Small, ForeColor = Theme.Muted, BackColor = Theme.Bg, AutoSize = false, Bounds = Rectangle.Round(R(24, 34, 380, 20)) };
+            fleetSummary = new Label { Font = Fonts.Small, ForeColor = Theme.Muted, BackColor = Theme.Bg, AutoSize = false, Bounds = Rectangle.Round(R(24, 34, 250, 20)) };
             p.Controls.Add(fleetSummary);
 
-            var now = new PillButton { Primary = true, Text = "Back up now", Font = Fonts.Button, Bounds = Rectangle.Round(R(W - 24 - 150, 4, 150, 42)) };
-            now.Click += (o, e) => { if (backupNow != null) backupNow(); };
-            var folder = new PillButton { Text = "Open hangar folder", Font = Fonts.Button, Bounds = Rectangle.Round(R(W - 24 - 150 - 10 - 180, 4, 180, 42)) };
+            var special = new PillButton { Special = true, Text = "★ Special backup", Font = Fonts.Button, Bounds = Rectangle.Round(R(W - 24 - 180, 4, 180, 42)) };
+            special.Click += (o, e) => { if (host != null) { host.SpecialBackup(this, null); RefreshData(true); } };
+            var now = new PillButton { Primary = true, Text = "Back up now", Font = Fonts.Button, Bounds = Rectangle.Round(R(W - 24 - 180 - 10 - 140, 4, 140, 42)) };
+            now.Click += (o, e) => { if (host != null) host.BackupNow(); };
+            var folder = new PillButton { Text = "Open folder", Font = Fonts.Button, Bounds = Rectangle.Round(R(W - 24 - 180 - 10 - 140 - 10 - 120, 4, 120, 42)) };
+            p.Controls.Add(special);
             folder.Click += (o, e) => OpenFolder(Settings.Load().BackupRoot);
             p.Controls.Add(now);
             p.Controls.Add(folder);
@@ -743,7 +820,8 @@ namespace QuadBackup
 
         void RefreshHangar(DroneDb db, bool force)
         {
-            var sig = string.Join("|", db.Drones.Select(d => d.FcId + "/" + d.Name + "/" + d.Folder + "/" + d.Ignored + "/" + d.LastBackup + "/" + CountFiles(d.Folder)));
+            var sig = string.Join("|", db.Drones.Select(d => d.FcId + "/" + d.Name + "/" + d.Folder + "/" + d.Ignored + "/" + d.LastBackup + "/" + CountFiles(d.Folder) +
+                                                         "/" + IsPluggedIn(d) + "/" + PendingFor(d)));
             if (!force && sig == hangarSignature)
             {
                 foreach (Control c in cards.Controls) c.Invalidate(); // "5 min ago" ticks over
@@ -759,7 +837,7 @@ namespace QuadBackup
                 cards.Controls.Add(new EmptyHangar(S) { Size = new Size(cardW, (int)(260 * S)) });
             foreach (var d in db.Drones.OrderBy(d => d.Ignored).ThenByDescending(d => ParseTime(d.LastBackup) ?? DateTime.MinValue))
             {
-                var card = new DroneCard(d, S) { Width = cardW };
+                var card = new DroneCard(d, S, IsPluggedIn(d), PendingFor(d)) { Width = cardW };
                 card.ActionClicked += OnCardAction;
                 cards.Controls.Add(card);
             }
@@ -774,6 +852,9 @@ namespace QuadBackup
 
         static string Plural(int n, string word) { return n + " " + word + (n == 1 ? "" : "s"); }
 
+        bool IsPluggedIn(Drone d) { return host != null && d.FcId != null && host.IsPluggedIn(d.FcId); }
+        string PendingFor(Drone d) { return host != null && d.FcId != null ? host.PendingSpecial(d.FcId) : null; }
+
         static int CountFiles(string folder)
         {
             try { return !string.IsNullOrEmpty(folder) && Directory.Exists(folder) ? Directory.GetFiles(folder, "*.txt").Length : 0; }
@@ -787,6 +868,9 @@ namespace QuadBackup
             {
                 switch (action)
                 {
+                    case "special":
+                        if (host != null) host.SpecialBackup(this, d.FcId);
+                        break;
                     case "open":
                         if (Directory.Exists(d.Folder)) OpenFolder(d.Folder);
                         else ThemedDialog.Alert(this, "That folder's gone missing", "Use Change folder to point " + d.Name + " somewhere new.");
@@ -1036,7 +1120,7 @@ namespace QuadBackup
                 change(s);
                 s.Save();
                 savedAt = clock.ElapsedMilliseconds;
-                if (settingsChanged != null) settingsChanged();
+                if (host != null) host.SettingsChanged();
             }
             catch (Exception ex)
             {

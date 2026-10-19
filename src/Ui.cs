@@ -104,6 +104,25 @@ namespace QuadBackup
 
         // A top-down quad with a face. Drawn in a 100x100 box centred on (cx, cy) and scaled to `size` pixels.
         // blink: 0 = eyes open, 1 = shut. dizzy swaps the eyes for little spirals of shame.
+        // Three twinkling four-point stars around a circle of radius r centred on c.
+        public static void Sparkles(Graphics g, PointF c, float r, float t, float s)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            float[] angles = { -50, 35, 150 };
+            for (int i = 0; i < angles.Length; i++)
+            {
+                double a = angles[i] * Math.PI / 180;
+                float twinkle = (float)(0.55 + 0.45 * Math.Sin(t * 4 + i * 2.1));
+                float x = c.X + (float)Math.Cos(a) * (r + 2 * s), y = c.Y + (float)Math.Sin(a) * (r + 2 * s);
+                float z = (3.2f + i * 0.8f) * s * twinkle;
+                using (var b = new SolidBrush(Theme.Alpha(Theme.Hex(0xFFE58A), (int)(255 * twinkle))))
+                {
+                    g.FillEllipse(b, x - z * 2, y - z * 0.4f, z * 4, z * 0.8f);
+                    g.FillEllipse(b, x - z * 0.4f, y - z * 2, z * 0.8f, z * 4);
+                }
+            }
+        }
+
         public static void Draw(Graphics g, float cx, float cy, float size, float propAngle, float tilt, float blink,
                                 bool face, Color body, bool dizzy = false)
         {
@@ -271,6 +290,17 @@ namespace QuadBackup
         };
 
         public static string ForSave() { return Saved[Rnd.Next(Saved.Length)]; }
+
+        static readonly string[] SpecialSaved =
+        {
+            "Framed and hung on the hangar wall.",
+            "Hall of fame material.",
+            "This one's a keeper.",
+            "Saved with extra sparkle.",
+            "Certified banger tune.",
+        };
+
+        public static string ForSpecial() { return SpecialSaved[Rnd.Next(SpecialSaved.Length)]; }
     }
 
     // ------------------------------------------------------------------------------------------------ scenery
@@ -406,9 +436,32 @@ namespace QuadBackup
     class PillButton : Control, IButtonControl
     {
         public bool Primary;
-        bool hover, down, isDefault;
+        bool hover, down, isDefault, special;
+        Timer shine;
 
         public DialogResult DialogResult { get; set; }
+
+        // Gold with a shine sweeping across it, for the special backup.
+        public bool Special
+        {
+            get { return special; }
+            set
+            {
+                special = value;
+                if (value && shine == null)
+                {
+                    shine = new Timer { Interval = 40 };
+                    shine.Tick += (s, e) => Invalidate();
+                    shine.Start();
+                }
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && shine != null) shine.Dispose();
+            base.Dispose(disposing);
+        }
 
         public PillButton()
         {
@@ -444,7 +497,24 @@ namespace QuadBackup
             var r = new RectangleF(1, 2 + lift, Width - 2, Height - 4);
             using (var path = Theme.Round(r, r.Height / 2))
             {
-                if (Primary)
+                if (special)
+                {
+                    using (var under = Theme.Round(new RectangleF(1, 4, Width - 2, Height - 5), r.Height / 2))
+                    using (var shade = new SolidBrush(Theme.Hex(0xB06A00)))
+                        g.FillPath(shade, under);
+                    var a = hover ? Theme.Hex(0xFFE58A) : Theme.Hex(0xFFD45C);
+                    var b = hover ? Theme.Hex(0xFFBE55) : Theme.Hex(0xFFA51F);
+                    using (var fill = new LinearGradientBrush(r, a, b, 0f)) g.FillPath(fill, path);
+                    // a diagonal glint that sweeps across every couple of seconds
+                    float sweep = (Environment.TickCount % 2400) / 2400f;
+                    float gx = r.X - 40 + sweep * (r.Width + 120);
+                    var state = g.Save();
+                    g.SetClip(path);
+                    using (var glint = new SolidBrush(Theme.Alpha(Color.White, 110)))
+                        g.FillPolygon(glint, new[] { new PointF(gx, r.Bottom), new PointF(gx + 14, r.Bottom), new PointF(gx + 34, r.Y), new PointF(gx + 20, r.Y) });
+                    g.Restore(state);
+                }
+                else if (Primary)
                 {
                     // chunky drop "shadow" for a toy-like feel
                     using (var under = Theme.Round(new RectangleF(1, 4, Width - 2, Height - 5), r.Height / 2))
@@ -464,7 +534,7 @@ namespace QuadBackup
                     using (var inner = Theme.Round(RectangleF.Inflate(r, -3, -3), (r.Height - 6) / 2))
                         g.DrawPath(ring, inner);
             }
-            var color = !Enabled ? Theme.Muted : (Primary ? Color.White : Theme.Text);
+            var color = !Enabled ? Theme.Muted : (special ? Theme.Ink : (Primary ? Color.White : Theme.Text));
             Theme.DrawText(g, Text, Font, r, color, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
         }
     }
@@ -904,7 +974,7 @@ namespace QuadBackup
 
     // ------------------------------------------------------------------------------------------------ pop-up notifications
 
-    public enum ToastKind { Success, Info, Warning, Error }
+    public enum ToastKind { Success, Info, Warning, Error, Special }
 
     public class Toast : Form
     {
@@ -1004,6 +1074,7 @@ namespace QuadBackup
                     case ToastKind.Success: return Theme.Mint;
                     case ToastKind.Warning: return Theme.Amber;
                     case ToastKind.Error: return Theme.Pink;
+                    case ToastKind.Special: return Theme.Hex(0xFFC93C);
                     default: return Theme.Sky;
                 }
             }
@@ -1080,11 +1151,13 @@ namespace QuadBackup
                 case ToastKind.Success: tilt = (float)Math.Sin(t * 3) * 8; bob = (float)Math.Abs(Math.Sin(t * 4)) * -3 * S; break;
                 case ToastKind.Error: tilt = 22 + (float)Math.Sin(t * 11) * 5; break;
                 case ToastKind.Warning: tilt = (float)Math.Sin(t * 5) * 12; break;
+                case ToastKind.Special: tilt = (t * 140) % 360; bob = (float)Math.Sin(t * 3) * -3 * S; break; // victory spin
                 default: tilt = (float)Math.Sin(t * 1.6) * 5; break;
             }
             float phase = (t + 1.6f) % 3.3f;
             float blink = phase < 0.14f ? (float)Math.Sin(phase / 0.14f * Math.PI) : 0;
             QuadArt.Draw(g, c.X, c.Y + bob, 50 * S, propAngle, tilt, blink, true, Accent, kind == ToastKind.Error);
+            if (kind == ToastKind.Special) QuadArt.Sparkles(g, c, r, t, S);
 
             float x = 92 * S, w = Width - x - 34 * S;
             Theme.DrawText(g, title, titleFont, new RectangleF(x, 16 * S, w, 24 * S), Theme.Text, TextFormatFlags.Left | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
@@ -1138,6 +1211,7 @@ namespace QuadBackup
         protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
         {
             if ("header".Equals(e.Item.Tag)) e.TextColor = Theme.Mint;
+            else if ("special".Equals(e.Item.Tag)) e.TextColor = Theme.Hex(0xFFC93C);
             else e.TextColor = e.Item.Enabled ? Theme.Text : Theme.Muted;
             base.OnRenderItemText(e);
         }

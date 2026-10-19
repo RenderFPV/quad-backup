@@ -731,10 +731,14 @@ namespace QuadBackup
             return clean.Length > 0 ? clean : "Drone";
         }
 
-        public static string Write(string folder, string droneName, FcBackup b, DateTime when)
+        public const string SpecialTag = "_SPECIAL_";
+
+        // specialName != null makes it a named special backup: Name_YYYY-MM-DD_HH-MM-SS_SPECIAL_<name>.txt
+        public static string Write(string folder, string droneName, FcBackup b, DateTime when, string specialName = null)
         {
             Directory.CreateDirectory(folder);
             var file = Path.Combine(folder, SafeName(droneName) + "_" + when.ToString("yyyy-MM-dd_HH-mm-ss") +
+                                            (specialName != null ? SpecialTag + SafeName(specialName) : "") +
                                             (b.Complete ? "" : "_INCOMPLETE") + ".txt");
             File.WriteAllText(file, b.Cli, new UTF8Encoding(false));
             return file;
@@ -750,7 +754,7 @@ namespace QuadBackup
         }
     }
 
-    enum JobKind { PluggedIn, BetaflightClosed, Disconnected, Manual }
+    enum JobKind { PluggedIn, BetaflightClosed, Disconnected, Manual, Special }
 
     // What the monitor knows about one flight controller's port while Betaflight might be using it.
     class PortWatch
@@ -764,17 +768,21 @@ namespace QuadBackup
     {
         public JobKind Kind;
         public string Port;
+        public string SpecialName; // for JobKind.Special
         public Job(JobKind kind, string port) { Kind = kind; Port = port; }
     }
 
     enum Outcome { NotFlightController, Busy, Skipped, Failed, Saved }
 
-    class TrayApp : ApplicationContext
+    class TrayApp : ApplicationContext, IHangarHost
     {
         readonly Control ui;
         readonly NotifyIcon tray;
         readonly BlockingCollection<Job> jobs = new BlockingCollection<Job>();
-        readonly Dictionary<string, string> portFcIds = new Dictionary<string, string>(); // worker thread only
+        readonly ConcurrentDictionary<string, string> portFcIds = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Special backups asked for while Betaflight had the quad: FC id (or "port:COMx" if not identified yet) -> name.
+        // The next backup of that quad - normally the one when you disconnect - gets the name.
+        readonly ConcurrentDictionary<string, string> pendingSpecial = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         // Ports we just sent "exit" to: the next time each one reappears is its reboot, not a plug-in.
         readonly ConcurrentDictionary<string, DateTime> expectedReboots = new ConcurrentDictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
         // Ports known to have a flight controller on them; the monitor watches these for Betaflight disconnects.
@@ -830,8 +838,73 @@ namespace QuadBackup
         void ShowMain(MainWindow.Page page)
         {
             if (main == null || main.IsDisposed)
-                main = new MainWindow(() => jobs.Add(new Job(JobKind.Manual, null)), () => { settings = Settings.Load(); ApplyLiveSettings(); });
+                main = new MainWindow(this);
             main.ShowOn(page);
+        }
+
+        // ------------------------------------------------------------------ IHangarHost (called on the UI thread)
+
+        public void BackupNow() { jobs.Add(new Job(JobKind.Manual, null)); }
+
+        public void SettingsChanged()
+        {
+            settings = Settings.Load();
+            ApplyLiveSettings();
+        }
+
+        public void SpecialBackup(IWin32Window owner, string fcId)
+        {
+            var candidates = Ports.List().Where(p => fcPorts.ContainsKey(p)).ToList();
+            string port = null;
+            if (fcId != null)
+                port = candidates.FirstOrDefault(p => { string id; return portFcIds.TryGetValue(p, out id) && string.Equals(id, fcId, StringComparison.OrdinalIgnoreCase); });
+            if (port == null) port = candidates.FirstOrDefault();
+            if (port == null)
+            {
+                ThemedDialog.Alert(owner, "No quad plugged in", "Plug in the quad you're tuning, then hit Special backup again.");
+                return;
+            }
+            string knownId, droneName = null;
+            if (portFcIds.TryGetValue(port, out knownId))
+            {
+                var d = DroneDb.Load().Find(knownId);
+                if (d != null) droneName = d.Name;
+            }
+            var name = ThemedDialog.PromptSpecial(owner, droneName);
+            if (name == null) return;
+            jobs.Add(new Job(JobKind.Special, port) { SpecialName = name });
+        }
+
+        public string PendingSpecial(string fcId)
+        {
+            string name;
+            if (pendingSpecial.TryGetValue(fcId, out name)) return name;
+            foreach (var kv in portFcIds) // waiting under the port before the FC was identified
+                if (string.Equals(kv.Value, fcId, StringComparison.OrdinalIgnoreCase) && pendingSpecial.TryGetValue("port:" + kv.Key, out name))
+                    return name;
+            return null;
+        }
+
+        public bool IsPluggedIn(string fcId)
+        {
+            var present = Ports.List();
+            return portFcIds.Any(kv => string.Equals(kv.Value, fcId, StringComparison.OrdinalIgnoreCase) &&
+                                       present.Contains(kv.Key, StringComparer.OrdinalIgnoreCase));
+        }
+
+        bool HasPendingSpecial(string port)
+        {
+            string id;
+            return pendingSpecial.ContainsKey("port:" + port) || (portFcIds.TryGetValue(port, out id) && pendingSpecial.ContainsKey(id));
+        }
+
+        // Takes (removes) the special name waiting for this quad, if any.
+        string TakePendingSpecial(string port, string fcId)
+        {
+            string name;
+            if (fcId != null && pendingSpecial.TryRemove(fcId, out name)) return name;
+            if (pendingSpecial.TryRemove("port:" + port, out name)) return name;
+            return null;
         }
 
         void ApplyLiveSettings()
@@ -851,6 +924,9 @@ namespace QuadBackup
             open.Font = new Font(menu.Font, FontStyle.Bold);
             menu.Items.Add(open);
             menu.Items.Add("Back up the plugged-in quad now", null, (s, e) => jobs.Add(new Job(JobKind.Manual, null)));
+            var special = new ToolStripMenuItem("★ Special backup…", null, (s, e) => SpecialBackup(null, null));
+            special.Tag = "special"; // drawn in gold by MenuRenderer
+            menu.Items.Add(special);
             menu.Items.Add("Open backups folder", null, (s, e) => OpenFolder(settings.BackupRoot));
             menu.Items.Add("Launch Betaflight", null, (s, e) => LaunchBetaflight());
             menu.Items.Add(new ToolStripSeparator());
@@ -924,7 +1000,8 @@ namespace QuadBackup
                     betaflightWasRunning = running;
                 }
 
-                if (backupWhenDisconnected) WatchForDisconnects(present, watches, betaflightWasRunning, now);
+                // a waiting special backup needs the disconnect watcher even if disconnect backups are switched off
+                if (backupWhenDisconnected || !pendingSpecial.IsEmpty) WatchForDisconnects(present, watches, betaflightWasRunning, now);
                 Thread.Sleep(200);
             }
         }
@@ -972,7 +1049,7 @@ namespace QuadBackup
                         w.SeenInUse = false;
                         w.Rebooted = false;
                         w.FreeSince = null;
-                        jobs.Add(new Job(JobKind.Disconnected, port));
+                        if (backupWhenDisconnected || HasPendingSpecial(port)) jobs.Add(new Job(JobKind.Disconnected, port));
                     }
                 }
             }
@@ -1014,9 +1091,11 @@ namespace QuadBackup
                 return;
             }
 
-            if (job.Kind == JobKind.Disconnected)
+            if (job.Kind == JobKind.Disconnected || job.Kind == JobKind.Special)
             {
-                if (Ports.List().Contains(job.Port, StringComparer.OrdinalIgnoreCase)) BackupPort(job.Port, job.Kind);
+                if (Ports.List().Contains(job.Port, StringComparer.OrdinalIgnoreCase)) BackupPort(job.Port, job.Kind, job.SpecialName);
+                else if (job.Kind == JobKind.Special)
+                    Notify(ToastKind.Warning, "Where'd it go?", "The quad was unplugged before I could save \"" + job.SpecialName + "\". Plug it back in and try again.", null);
                 return;
             }
 
@@ -1031,12 +1110,12 @@ namespace QuadBackup
                 Notify(ToastKind.Info, "No quads here...", "Plug a flight controller in over USB and try again.", null);
         }
 
-        Outcome BackupPort(string port, JobKind kind)
+        Outcome BackupPort(string port, JobKind kind, string specialName = null)
         {
             var timer = Stopwatch.StartNew();
-            // A disconnect comes from a port we've already confirmed is a flight controller and that never left,
-            // so the (slow) USB vendor lookup can be skipped; the MSP check below still confirms it's Betaflight.
-            if (!(kind == JobKind.Disconnected && fcPorts.ContainsKey(port)))
+            // A disconnect or special backup comes from a port we've already confirmed is a flight controller, so the
+            // (slow) USB vendor lookup can be skipped; the MSP check below still confirms it's Betaflight.
+            if (!((kind == JobKind.Disconnected || kind == JobKind.Special) && fcPorts.ContainsKey(port)))
             {
                 var vid = Ports.GetVendorId(port);
                 if (vid == null || !settings.UsbVendorIds.Any(v => string.Equals(v, vid, StringComparison.OrdinalIgnoreCase)))
@@ -1065,7 +1144,16 @@ namespace QuadBackup
                 expectedReboots.TryRemove(port, out ignored);
                 fcPorts[port] = true; // Betaflight has it; the disconnect watcher will catch it when it lets go
                 Log.Write(port + ": in use by another program (Betaflight connected first)");
-                if (kind == JobKind.PluggedIn)
+                if (kind == JobKind.Special)
+                {
+                    // mid-tune: Betaflight has the quad, so save it the moment it lets go
+                    string id;
+                    pendingSpecial[portFcIds.TryGetValue(port, out id) ? id : "port:" + port] = specialName;
+                    Log.Write(port + ": special backup \"" + specialName + "\" waiting for a disconnect");
+                    Notify(ToastKind.Special, "★ \"" + specialName + "\" is ready!",
+                        "Disconnect in Betaflight and I'll save it. (Hit Save in Betaflight first if you haven't.)", null);
+                }
+                else if (kind == JobKind.PluggedIn)
                     Notify(ToastKind.Warning, "Betaflight beat me to it!", "It grabbed " + port + " first." +
                         (backupWhenDisconnected ? " I'll back it up when you disconnect."
                          : backupWhenBetaflightCloses ? " I'll back it up when you close Betaflight." : ""), null);
@@ -1102,8 +1190,12 @@ namespace QuadBackup
                       " (" + b.Cli.Length + " chars" + (b.Complete ? "" : ", INCOMPLETE") + ", " +
                       (b.Rebooted ? "rebooted" : "no reboot") + ", " + (timer.ElapsedMilliseconds / 1000.0).ToString("0.0") + "s)");
 
+            // a special backup asked for earlier (while Betaflight had the quad) rides along with this one
+            var waiting = TakePendingSpecial(port, b.FcId);
+            if (specialName == null) specialName = waiting;
+
             var drone = db.Find(b.FcId);
-            if (drone != null && drone.Ignored)
+            if (drone != null && drone.Ignored && specialName == null) // asking for a special backup overrides "paused"
             {
                 Log.Write(port + ": drone is set to never back up");
                 return Outcome.Skipped;
@@ -1136,8 +1228,9 @@ namespace QuadBackup
             drone.Board = b.Board;
             drone.Firmware = b.Firmware;
 
-            // end-of-session backups (disconnect / Betaflight closed) are only kept if the tune actually changed
-            if ((kind == JobKind.BetaflightClosed || kind == JobKind.Disconnected) && BackupFiles.SameAsLatest(drone.Folder, b.Cli))
+            // end-of-session backups (disconnect / Betaflight closed) are only kept if the tune actually changed;
+            // special backups are always kept
+            if (specialName == null && (kind == JobKind.BetaflightClosed || kind == JobKind.Disconnected) && BackupFiles.SameAsLatest(drone.Folder, b.Cli))
             {
                 Log.Write(port + ": " + drone.Name + " unchanged since last backup");
                 DroneDb.Upsert(drone);
@@ -1145,11 +1238,13 @@ namespace QuadBackup
                 return Outcome.Saved;
             }
 
-            var file = BackupFiles.Write(drone.Folder, drone.Name, b, DateTime.Now);
+            var file = BackupFiles.Write(drone.Folder, drone.Name, b, DateTime.Now, specialName);
             drone.LastBackup = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
             DroneDb.Upsert(drone);
-            Log.Write(port + ": saved " + file);
-            if (b.Complete)
+            Log.Write(port + ": saved " + (specialName != null ? "special backup " : "") + file);
+            if (specialName != null && b.Complete)
+                Notify(ToastKind.Special, "★ \"" + specialName + "\" saved!", Quips.ForSpecial() + "\n" + Path.GetFileName(file), drone.Folder);
+            else if (b.Complete)
                 Notify(ToastKind.Success, drone.Name + " is backed up!", Quips.ForSave() + "\n" + Path.GetFileName(file), drone.Folder);
             else
                 Notify(ToastKind.Warning, "Partial backup of " + drone.Name, "The FC stopped talking partway through. Check the file:\n" + Path.GetFileName(file), drone.Folder);
