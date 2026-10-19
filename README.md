@@ -5,7 +5,7 @@ Backs up a Betaflight flight controller every time you plug it in over USB, then
 ## What happens when you plug in a drone
 
 1. Quad Backup checks that the device is a Betaflight FC and reads its chip ID, which identifies the drone.
-2. It runs `diff all` in the CLI and sends `exit`. The FC reboots, the same as when you leave the CLI tab.
+2. It runs `diff all` in the CLI, then leaves the CLI with `exit noreboot`, so the FC doesn't reboot.
 3. **First time you plug in that drone:** a window asks you to name a folder for it. It suggests the craft name.
    **After that:** the backup is saved to that folder without asking, as `Name_YYYY-MM-DD_HH-MM-SS.txt`.
 4. Betaflight opens, unless it's already open.
