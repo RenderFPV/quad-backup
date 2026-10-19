@@ -11,7 +11,8 @@ Backs up a Betaflight flight controller every time you plug it in over USB, then
 4. Betaflight opens, unless it's already open.
 
 Other things it does:
-- **Backup when Betaflight closes:** if a drone is still plugged in when you close Betaflight, it's backed up again, so you get the tune from that session. This copy is only kept if something changed.
+- **Backup when you disconnect in Betaflight:** hit **Disconnect** with the quad still plugged in, and that session's tune is backed up. This copy is only kept if something changed. Betaflight also lets go of the quad on its own for a moment (reboot after Save, CLI, Blackbox, flashing), so the quad has to stay disconnected for **Disconnect wait** (8 seconds by default) before it counts. Closing Betaflight counts as a disconnect too, and there's a separate close-only option if you turn disconnect backups off.
+- **No extra reboot:** the app leaves the CLI with `exit noreboot`, so the FC isn't rebooted after a backup. Firmware that doesn't support `noreboot` reboots instead, which is harmless.
 - **Reboots aren't plug-ins:** if the FC reboots after you hit Save, it isn't backed up again.
 - **New FC, same quad:** if you replace an FC and keep the craft name, the window offers that drone's existing folder.
 

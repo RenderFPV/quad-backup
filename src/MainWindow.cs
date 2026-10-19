@@ -887,10 +887,16 @@ namespace QuadBackup
             }
             Row(p, "Firmware to back up", "Flight controllers running anything else are left alone.", ref y, false, chips.ToArray());
 
+            var whenDisconnected = new Toggle(S);
+            whenDisconnected.SetInitial(s.BackupWhenDisconnected);
+            whenDisconnected.Changed += (o, e) => SaveSetting(x => x.BackupWhenDisconnected = whenDisconnected.On);
+            Row(p, "Back up when you disconnect in Betaflight", "Hit Disconnect with the quad still plugged in and I'll save that session's tune. " +
+                "Only kept if something changed. Also covers closing Betaflight.", ref y, false, whenDisconnected);
+
             var whenClosed = new Toggle(S);
             whenClosed.SetInitial(s.BackupWhenBetaflightCloses);
             whenClosed.Changed += (o, e) => SaveSetting(x => x.BackupWhenBetaflightCloses = whenClosed.On);
-            Row(p, "Back up again when Betaflight closes", "Catches that session's tune if the quad's still plugged in. Only kept if something changed.", ref y, false, whenClosed);
+            Row(p, "Back up when Betaflight closes", "For when disconnect backups are off: close Betaflight with the quad still plugged in to save that session's tune.", ref y, false, whenClosed);
 
             Section(p, "BETAFLIGHT", ref y);
             var launch = new Toggle(S);
@@ -954,6 +960,20 @@ namespace QuadBackup
             grace.Box.Leave += (o, e) => commitGrace();
             grace.Box.KeyDown += (o, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; commitGrace(); } };
             Row(p, "Reboot grace (seconds)", "While Betaflight is open, a quad that reconnects this fast is treated as a reboot after Save, not a new plug-in. 2 to 60.", ref y, false, grace);
+
+            var wait = new InputBox(S, Fonts.Input) { Size = Sz(80, 38) };
+            wait.Box.Text = s.DisconnectWaitSeconds.ToString();
+            Action commitWait = () =>
+            {
+                int n;
+                bool valid = int.TryParse(wait.Box.Text.Trim(), out n) && n >= 3 && n <= 60;
+                wait.Bad = !valid;
+                if (valid && n != Settings.Load().DisconnectWaitSeconds) SaveSetting(x => x.DisconnectWaitSeconds = n);
+            };
+            wait.Box.Leave += (o, e) => commitWait();
+            wait.Box.KeyDown += (o, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; commitWait(); } };
+            Row(p, "Disconnect wait (seconds)", "Betaflight lets go of the quad by itself for a moment (Save, CLI, Blackbox, flashing) and reconnects. " +
+                "It has to stay disconnected this long to count. Raise it if you get backups you didn't ask for. 3 to 60.", ref y, false, wait);
 
             y += 18;
             p.Controls.Add(new Label { Text = "Changes save automatically.", Font = Fonts.Small, ForeColor = Theme.Muted, BackColor = Theme.Bg, AutoSize = true, Location = Pt(24, y + 8) });
