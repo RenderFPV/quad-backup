@@ -2,6 +2,8 @@
 
 Backs up a Betaflight flight controller every time you plug it in over USB, then opens Betaflight.
 
+> **Built with AI.** I came up with the idea and tested it on my own quads, but the code was written by Claude, Anthropic's AI, using Claude Code. I'm a pilot, not a programmer, so if something's broken, an issue describing what happened will get further than asking me how the code works.
+
 ## What happens when you plug in a drone
 
 1. Quad Backup checks that the device is a Betaflight FC and reads its chip ID, which identifies the drone.
