@@ -8,3 +8,10 @@ QuadBackup.log
 QuadBackup.log.old
 *.tmp
 Backups/
+
+# Mac/Linux build output
+desktop/bin/
+desktop/obj/
+desktop/dist/
+show.signal
+
