@@ -164,9 +164,9 @@ namespace QuadBackup
             BetaflightLaunchPath = "";
             BackupWhenBetaflightCloses = true;
             BackupWhenDisconnected = true;
-            // Betaflight lets go of the port briefly on its own (reboot after Save, CLI, Blackbox, flashing) and
-            // reconnects; only a port that stays free this long counts as you clicking Disconnect.
-            DisconnectWaitSeconds = 8;
+            // How long the port must stay free, without the quad rebooting, to count as you clicking Disconnect.
+            // After a reboot (Save, CLI, Blackbox, flashing) the wait is at least RebootGraceSeconds instead.
+            DisconnectWaitSeconds = 2;
             ShowNotifications = true;
             CliCommand = "diff all";
             // STMicro (F4/F7/H7), Artery (AT32), Geehy (APM32). Other USB-serial gadgets (Arduinos, printers, radios
@@ -501,7 +501,7 @@ namespace QuadBackup
                     try
                     {
                         link.Write(Ascii("exit noreboot\n"));
-                        var tail = Encoding.ASCII.GetString(ReadFor(link, 400));
+                        var tail = Encoding.ASCII.GetString(ReadFor(link, 250));
                         r.Rebooted = tail.IndexOf("rebooting", StringComparison.OrdinalIgnoreCase) >= 0;
                     }
                     catch { r.Rebooted = true; } // the port vanished mid-read: it rebooted
@@ -540,6 +540,7 @@ namespace QuadBackup
 
         // Reads until the output ends with the CLI prompt "\n# " and nothing more arrives for quietMs.
         // (diff output is full of lines starting with "# ", so the quiet period is what tells the prompt apart.)
+        // A diff/dump ends with "batch end" followed by the prompt; once that's in, there's nothing left to wait for.
         static byte[] ReadUntilPrompt(ILink link, int timeoutMs, int quietMs, out bool ok)
         {
             var buf = new MemoryStream();
@@ -548,12 +549,19 @@ namespace QuadBackup
             var quiet = Stopwatch.StartNew();
             while (total.ElapsedMilliseconds < timeoutMs)
             {
-                int n = link.Read(chunk, 50);
+                int n = link.Read(chunk, 20);
                 if (n > 0) { buf.Write(chunk, 0, n); quiet.Restart(); continue; }
-                if (EndsWithPrompt(buf) && quiet.ElapsedMilliseconds >= quietMs) { ok = true; return buf.ToArray(); }
+                if (EndsWithPrompt(buf) && (quiet.ElapsedMilliseconds >= quietMs || EndsWithBatchEnd(buf))) { ok = true; return buf.ToArray(); }
             }
             ok = false;
             return buf.ToArray();
+        }
+
+        static bool EndsWithBatchEnd(MemoryStream ms)
+        {
+            int n = (int)Math.Min(ms.Length, 32);
+            var tail = Encoding.ASCII.GetString(ms.GetBuffer(), (int)ms.Length - n, n);
+            return Regex.IsMatch(tail, @"\nbatch end\s*\n# $");
         }
 
         static byte[] ReadFor(ILink link, int ms)
@@ -749,7 +757,7 @@ namespace QuadBackup
     {
         public bool SeenInUse;      // Betaflight (or another app) has had it open since the last backup
         public DateTime? FreeSince; // when it was first seen free again
-
+        public bool Rebooted;       // the port vanished and came back since Betaflight last had it (Save, CLI, flashing...)
     }
 
     class Job
@@ -831,7 +839,7 @@ namespace QuadBackup
             rebootGraceSeconds = Math.Max(2, settings.RebootGraceSeconds);
             backupWhenBetaflightCloses = settings.BackupWhenBetaflightCloses;
             backupWhenDisconnected = settings.BackupWhenDisconnected;
-            disconnectWaitSeconds = Math.Max(3, settings.DisconnectWaitSeconds);
+            disconnectWaitSeconds = Math.Max(1, settings.DisconnectWaitSeconds);
         }
 
         ContextMenuStrip BuildMenu()
@@ -880,7 +888,6 @@ namespace QuadBackup
             }
             bool betaflightWasRunning = SafeIsBetaflightRunning();
             var nextBetaflightCheck = DateTime.UtcNow;
-            var nextProbe = DateTime.UtcNow;
 
             while (!stopping)
             {
@@ -917,26 +924,30 @@ namespace QuadBackup
                     betaflightWasRunning = running;
                 }
 
-                if (now >= nextProbe)
-                {
-                    nextProbe = now.AddSeconds(1);
-                    if (backupWhenDisconnected) WatchForDisconnects(present, watches, betaflightWasRunning, now);
-                }
-                Thread.Sleep(300);
+                if (backupWhenDisconnected) WatchForDisconnects(present, watches, betaflightWasRunning, now);
+                Thread.Sleep(200);
             }
         }
 
         // A flight controller's port going from "in use" to "free" while still plugged in means it was disconnected in
-        // Betaflight. Betaflight also lets go briefly by itself (reboot after Save, CLI, Blackbox, flashing) and then
-        // reconnects, so the port has to stay free for DisconnectWaitSeconds before it counts.
+        // Betaflight. Clicking Disconnect leaves the USB port in place, so a short DisconnectWaitSeconds is enough.
+        // When Betaflight reboots the quad itself (Save, leaving the CLI tab, Blackbox, flashing) the port vanishes and
+        // comes back, and Betaflight reconnects on its own a few seconds later; after that we wait at least
+        // RebootGraceSeconds so we never grab the port out from under its reconnect.
         void WatchForDisconnects(HashSet<string> present, Dictionary<string, PortWatch> watches, bool betaflightRunning, DateTime now)
         {
             foreach (var port in fcPorts.Keys)
             {
                 PortWatch w;
                 if (!watches.TryGetValue(port, out w)) watches[port] = w = new PortWatch();
-                if (!present.Contains(port)) { w.FreeSince = null; continue; } // rebooting or unplugged
-                if (!betaflightRunning && !w.SeenInUse) continue;              // nothing could have it open
+                if (!present.Contains(port))
+                {
+                    // rebooting or unplugged
+                    w.FreeSince = null;
+                    if (w.SeenInUse) w.Rebooted = true;
+                    continue;
+                }
+                if (!betaflightRunning && !w.SeenInUse) continue; // nothing could have it open
 
                 bool? inUse;
                 if (!Monitor.TryEnter(portGate)) continue; // we're backing something up right now
@@ -948,15 +959,18 @@ namespace QuadBackup
                 {
                     if (!w.SeenInUse) Log.Write(port + ": connected in Betaflight");
                     w.SeenInUse = true;
+                    w.Rebooted = false;
                     w.FreeSince = null;
                 }
                 else if (inUse == false && w.SeenInUse)
                 {
+                    int wait = w.Rebooted ? Math.Max(disconnectWaitSeconds, rebootGraceSeconds) : disconnectWaitSeconds;
                     if (w.FreeSince == null) w.FreeSince = now;
-                    else if ((now - w.FreeSince.Value).TotalSeconds >= disconnectWaitSeconds)
+                    else if ((now - w.FreeSince.Value).TotalSeconds >= wait)
                     {
-                        Log.Write(port + ": disconnected in Betaflight");
+                        Log.Write(port + ": disconnected in Betaflight" + (w.Rebooted ? " (after a reboot, Betaflight didn't reconnect)" : ""));
                         w.SeenInUse = false;
+                        w.Rebooted = false;
                         w.FreeSince = null;
                         jobs.Add(new Job(JobKind.Disconnected, port));
                     }
@@ -1019,11 +1033,17 @@ namespace QuadBackup
 
         Outcome BackupPort(string port, JobKind kind)
         {
-            var vid = Ports.GetVendorId(port);
-            if (vid == null || !settings.UsbVendorIds.Any(v => string.Equals(v, vid, StringComparison.OrdinalIgnoreCase)))
+            var timer = Stopwatch.StartNew();
+            // A disconnect comes from a port we've already confirmed is a flight controller and that never left,
+            // so the (slow) USB vendor lookup can be skipped; the MSP check below still confirms it's Betaflight.
+            if (!(kind == JobKind.Disconnected && fcPorts.ContainsKey(port)))
             {
-                Log.Write(port + ": USB vendor " + (vid ?? "unknown") + " isn't a flight-controller chip - ignoring");
-                return Outcome.NotFlightController;
+                var vid = Ports.GetVendorId(port);
+                if (vid == null || !settings.UsbVendorIds.Any(v => string.Equals(v, vid, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Log.Write(port + ": USB vendor " + (vid ?? "unknown") + " isn't a flight-controller chip - ignoring");
+                    return Outcome.NotFlightController;
+                }
             }
 
             FcBackup b;
@@ -1079,7 +1099,8 @@ namespace QuadBackup
             }
             portFcIds[port] = b.FcId;
             Log.Write(port + ": read " + (b.Firmware ?? b.Variant) + " " + b.Board + " '" + b.CraftName + "' id " + b.FcId +
-                      " (" + b.Cli.Length + " chars" + (b.Complete ? "" : ", INCOMPLETE") + ")");
+                      " (" + b.Cli.Length + " chars" + (b.Complete ? "" : ", INCOMPLETE") + ", " +
+                      (b.Rebooted ? "rebooted" : "no reboot") + ", " + (timer.ElapsedMilliseconds / 1000.0).ToString("0.0") + "s)");
 
             var drone = db.Find(b.FcId);
             if (drone != null && drone.Ignored)

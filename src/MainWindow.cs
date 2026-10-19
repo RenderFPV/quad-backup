@@ -959,21 +959,22 @@ namespace QuadBackup
             };
             grace.Box.Leave += (o, e) => commitGrace();
             grace.Box.KeyDown += (o, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; commitGrace(); } };
-            Row(p, "Reboot grace (seconds)", "While Betaflight is open, a quad that reconnects this fast is treated as a reboot after Save, not a new plug-in. 2 to 60.", ref y, false, grace);
+            Row(p, "Reboot grace (seconds)", "While Betaflight is open, a quad that reconnects this fast is treated as a reboot after Save, not a new plug-in. " +
+                "Also how long I give Betaflight to reconnect after a reboot before counting it as a disconnect. 2 to 60.", ref y, false, grace);
 
             var wait = new InputBox(S, Fonts.Input) { Size = Sz(80, 38) };
             wait.Box.Text = s.DisconnectWaitSeconds.ToString();
             Action commitWait = () =>
             {
                 int n;
-                bool valid = int.TryParse(wait.Box.Text.Trim(), out n) && n >= 3 && n <= 60;
+                bool valid = int.TryParse(wait.Box.Text.Trim(), out n) && n >= 1 && n <= 60;
                 wait.Bad = !valid;
                 if (valid && n != Settings.Load().DisconnectWaitSeconds) SaveSetting(x => x.DisconnectWaitSeconds = n);
             };
             wait.Box.Leave += (o, e) => commitWait();
             wait.Box.KeyDown += (o, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; commitWait(); } };
-            Row(p, "Disconnect wait (seconds)", "Betaflight lets go of the quad by itself for a moment (Save, CLI, Blackbox, flashing) and reconnects. " +
-                "It has to stay disconnected this long to count. Raise it if you get backups you didn't ask for. 3 to 60.", ref y, false, wait);
+            Row(p, "Disconnect wait (seconds)", "How long after you hit Disconnect before I back up. When Betaflight reboots the quad itself " +
+                "(Save, CLI, Blackbox, flashing) I wait at least the reboot grace instead, so it can reconnect. 1 to 60.", ref y, false, wait);
 
             y += 18;
             p.Controls.Add(new Label { Text = "Changes save automatically.", Font = Fonts.Small, ForeColor = Theme.Muted, BackColor = Theme.Bg, AutoSize = true, Location = Pt(24, y + 8) });
