@@ -1,0 +1,10 @@
+# Built app - run build.cmd to make it
+QuadBackup.exe
+
+# Personal data the app creates when it runs
+settings.json
+drones.json
+QuadBackup.log
+QuadBackup.log.old
+*.tmp
+Backups/
