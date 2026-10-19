@@ -1,4 +1,4 @@
-"""Builds the downloadable Mac and Linux versions of Quad Backup into desktop/dist/.
+﻿"""Builds the downloadable Mac and Linux versions of Quad Backup into desktop/dist/.
 
     python package.py
 
@@ -16,7 +16,7 @@ DIST = os.path.join(HERE, "dist")
 PUBLISH = os.path.join(HERE, "bin", "publish")
 APP_NAME = "Quad Backup"
 EXE = "QuadBackup"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

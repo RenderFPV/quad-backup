@@ -536,8 +536,8 @@ namespace QuadBackup
             Theme.DrawText(g, name, Fonts.CardName, new RectangleF(x, 14 * S, nameW + 4, 28 * S), Theme.Text,
                            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
 
-            string chip = folderMissing ? "folder missing" : (Drone.Ignored ? "paused" : "on patrol");
-            var chipColor = folderMissing ? Theme.Pink : (Drone.Ignored ? Theme.Amber : Theme.Mint);
+            string chip = Drone.Ignored ? "paused" : (folderMissing ? "folder missing" : "on patrol");
+            var chipColor = Drone.Ignored ? Theme.Amber : (folderMissing ? Theme.Pink : Theme.Mint);
             float cw = Theme.Measure(g, chip, Fonts.SmallBold) + 18 * S;
             var chipRect = new RectangleF(x + nameW + 12 * S, 18 * S, cw, 21 * S);
             using (var path = Theme.Round(chipRect, chipRect.Height / 2))
@@ -723,6 +723,8 @@ namespace QuadBackup
         void ShowPage(Page p)
         {
             page = p;
+            // Settings is rebuilt each time so the turned-off drones list is current
+            if (p == Page.Settings && pages.ContainsKey(Page.Settings) && IsHandleCreated) RebuildSettingsPage();
             foreach (var kv in pages) kv.Value.Visible = kv.Key == p;
             if (Visible) RefreshData(true);
             Invalidate();
@@ -971,6 +973,12 @@ namespace QuadBackup
             }
             Row(p, "Firmware to back up", "Flight controllers running anything else are left alone.", ref y, false, chips.ToArray());
 
+            var skipSame = new Toggle(S);
+            skipSame.SetInitial(s.SkipUnchangedBackups);
+            skipSame.Changed += (o, e) => SaveSetting(x => x.SkipUnchangedBackups = skipSame.On);
+            Row(p, "Skip backups that haven't changed", "If a quad's settings match its last backup, I won't save another copy. " +
+                "Special backups are always kept.", ref y, false, skipSame);
+
             var whenDisconnected = new Toggle(S);
             whenDisconnected.SetInitial(s.BackupWhenDisconnected);
             whenDisconnected.Changed += (o, e) => SaveSetting(x => x.BackupWhenDisconnected = whenDisconnected.On);
@@ -981,6 +989,28 @@ namespace QuadBackup
             whenClosed.SetInitial(s.BackupWhenBetaflightCloses);
             whenClosed.Changed += (o, e) => SaveSetting(x => x.BackupWhenBetaflightCloses = whenClosed.On);
             Row(p, "Back up when Betaflight closes", "For when disconnect backups are off: close Betaflight with the quad still plugged in to save that session's tune.", ref y, false, whenClosed);
+
+            Section(p, "TURNED-OFF DRONES", ref y);
+            var db = DroneDb.Load();
+            var paused = db.Drones.Where(d => d.Ignored).ToList();
+            if (paused.Count == 0 && db.Forgotten.Count == 0)
+                Row(p, "None right now", "Every drone you've plugged in is on patrol. Drones you set to \"never back up\" or Forget show up here, so you can bring them back.", ref y, false);
+            foreach (var d in paused)
+            {
+                var drone = d;
+                var on = SmallButton("Back up again", 132);
+                on.Click += (o, e) => { DroneDb.Unpause(drone.FcId); BeginInvoke(new Action(RebuildSettingsPage)); };
+                Row(p, DroneTitle(drone), "Set to never back up" + DroneDetails(drone) +
+                    (string.IsNullOrEmpty(drone.Folder) ? ". I'll ask where to save it next time it's plugged in." : "."), ref y, false, on);
+            }
+            foreach (var d in db.Forgotten)
+            {
+                var drone = d;
+                var restore = SmallButton("Restore", 104);
+                restore.Click += (o, e) => { DroneDb.Restore(drone.FcId); BeginInvoke(new Action(RebuildSettingsPage)); };
+                Row(p, DroneTitle(drone), "Forgotten" + DroneDetails(drone) +
+                    (!string.IsNullOrEmpty(drone.Folder) ? ". Its backups are still in " + drone.Folder : "."), ref y, false, restore);
+            }
 
             Section(p, "BETAFLIGHT", ref y);
             var launch = new Toggle(S);
@@ -1070,6 +1100,32 @@ namespace QuadBackup
             return p;
         }
 
+        static string DroneTitle(Drone d)
+        {
+            return !string.IsNullOrEmpty(d.Name) ? d.Name : (!string.IsNullOrEmpty(d.CraftName) ? d.CraftName : (d.Board ?? "Unnamed quad"));
+        }
+
+        static string DroneDetails(Drone d)
+        {
+            var parts = new[] { d.Board, d.Firmware }.Where(x => !string.IsNullOrEmpty(x)).ToList();
+            return parts.Count > 0 ? " · " + string.Join(" · ", parts) : "";
+        }
+
+        void RebuildSettingsPage()
+        {
+            Panel old;
+            if (!pages.TryGetValue(Page.Settings, out old)) return;
+            int scroll = old.VerticalScroll.Value;
+            var fresh = BuildSettingsPage();
+            fresh.Bounds = old.Bounds;
+            fresh.Visible = old.Visible;
+            Controls.Add(fresh);
+            pages[Page.Settings] = fresh;
+            Controls.Remove(old);
+            old.Dispose();
+            if (scroll > 0) fresh.AutoScrollPosition = new Point(0, scroll);
+        }
+
         PillButton SmallButton(string text, float width)
         {
             return new PillButton { Text = text, Font = Fonts.ButtonSmall, Size = Sz(width, 36), BackColor = Theme.Bg };
@@ -1077,7 +1133,7 @@ namespace QuadBackup
 
         void Section(Panel p, string title, ref float y)
         {
-            p.Controls.Add(new Label { Text = title, Font = Fonts.SmallBold, ForeColor = Theme.Violet, BackColor = Theme.Bg, AutoSize = true, Location = Pt(24, y + 16) });
+            p.Controls.Add(new Label { Text = title, Font = Fonts.SmallBold, ForeColor = Theme.Violet, BackColor = Theme.Bg, AutoSize = true, UseMnemonic = false, Location = Pt(24, y + 16) });
             y += 38;
         }
 
@@ -1090,10 +1146,10 @@ namespace QuadBackup
                 : TextRenderer.MeasureText(desc, Fonts.Small, new Size((int)(textW * S), 0), TextFormatFlags.WordBreak).Height;
             float rowH = Math.Max(40 + descH / S + 14, 70);
 
-            p.Controls.Add(new Label { Text = title, Font = Fonts.BodyBold, ForeColor = Theme.Text, BackColor = Theme.Bg, AutoSize = false, Location = Pt(24, y + 12), Size = Sz(textW, 24) });
+            p.Controls.Add(new Label { Text = title, Font = Fonts.BodyBold, ForeColor = Theme.Text, BackColor = Theme.Bg, AutoSize = false, UseMnemonic = false, Location = Pt(24, y + 12), Size = Sz(textW, 24) });
             var d = new Label
             {
-                Text = desc, Font = Fonts.Small, ForeColor = Theme.Muted, BackColor = Theme.Bg, AutoSize = false, AutoEllipsis = singleLine,
+                Text = desc, Font = Fonts.Small, ForeColor = Theme.Muted, BackColor = Theme.Bg, AutoSize = false, AutoEllipsis = singleLine, UseMnemonic = false,
                 Location = Pt(24, y + 38), Size = new Size((int)(textW * S), descH + 2)
             };
             p.Controls.Add(d);
@@ -1422,5 +1478,6 @@ namespace QuadBackup
 
         // self-test hooks
         internal void PreviewPage(Page p) { ShowPage(p); RefreshData(true); }
+        internal Panel PreviewPanel(Page p) { return pages[p]; }
     }
 }

@@ -56,6 +56,7 @@ Your user needs permission to use USB serial devices: `sudo usermod -aG dialout 
 
 Other things it does:
 - **Backup when you disconnect in Betaflight:** hit **Disconnect** with the quad still plugged in, and that session's tune is backed up a couple of seconds later. This copy is only kept if something changed. When Betaflight reboots the quad itself (Save, leaving the CLI tab, Blackbox, flashing), the app waits for Betaflight to reconnect instead of grabbing the quad. Closing Betaflight counts as a disconnect too.
+- **No pile of duplicates:** if a quad's settings match its last backup, no new copy is saved. You get a "nothing new" pop-up instead. You can turn this off in Settings, and special backups are always kept.
 - **Reboots aren't plug-ins:** if the FC reboots after you hit Save, it isn't backed up again.
 - **New FC, same quad:** if you replace an FC and keep the craft name, the window offers that drone's existing folder.
 
@@ -82,12 +83,14 @@ The window has three pages:
   - **Rename** (this renames its backup folder too)
   - **Change folder**
   - **Pause backups** / **Resume backups** (also how you undo "Never for this drone")
-  - **Forget** (its backups are kept)
+  - **Forget** (its backups are kept, and you can restore it from Settings)
 
   **Back up now** backs up whatever is plugged in.
 - **Settings:** changes save as soon as you make them.
   - **Backups folder:** where new drone folders are created. Point it at a OneDrive, iCloud or Google Drive folder to keep backups off this computer.
   - **Backup command:** `diff all` (default) or `dump all`.
+  - **Skip backups that haven't changed** (on by default)
+  - **Turned-off drones:** drones you set to "never back up" or forgot. **Back up again** or **Restore** brings each one back. A restored drone keeps its old folder.
   - **Firmware to back up:** Betaflight, INAV and/or Emuflight.
   - **Back up when you disconnect in Betaflight** and **Back up when Betaflight closes**
   - **Open Betaflight after a backup**, and which Betaflight app to open.

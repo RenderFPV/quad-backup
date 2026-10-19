@@ -154,8 +154,8 @@ namespace QuadBackup
             var name = string.IsNullOrEmpty(Drone.Name) ? "Unnamed quad" : Drone.Name;
             var nameText = Txt.Text(name, 17, Palette.Text, FontWeight.Bold, Bounds.Width - x - rightW - 130);
             g.DrawText(nameText, new Point(x, 14));
-            string chip = folderMissing ? "folder missing" : (Drone.Ignored ? "paused" : "on patrol");
-            var chipColor = folderMissing ? Palette.Pink : (Drone.Ignored ? Palette.Amber : Palette.Mint);
+            string chip = Drone.Ignored ? "paused" : (folderMissing ? "folder missing" : "on patrol");
+            var chipColor = Drone.Ignored ? Palette.Amber : (folderMissing ? Palette.Pink : Palette.Mint);
             var chipText = Txt.Text(chip, 11, chipColor, FontWeight.Bold);
             var chipRect = new Rect(x + nameText.Width + 12, 18, chipText.Width + 18, 21);
             g.DrawRectangle(Palette.Brush(Palette.Alpha(chipColor, 40)), null, chipRect, 10.5, 10.5);
@@ -328,6 +328,8 @@ namespace QuadBackup
         void ShowPage(Page p)
         {
             page = p;
+            // Settings is rebuilt each time so the turned-off drones list is current
+            if (p == Page.Settings) pages[Page.Settings] = BuildSettingsPage();
             foreach (var kv in tabs) { kv.Value.Selected = kv.Key == p; kv.Value.InvalidateVisual(); }
             content.Content = pages[p];
             RefreshData(true);
@@ -551,6 +553,10 @@ namespace QuadBackup
             }
             Row(list, "Firmware to back up", "Flight controllers running anything else are left alone.", false, chips.ToArray());
 
+            var skipSame = new FaceToggle(s.SkipUnchangedBackups);
+            skipSame.Changed += (o, e) => SaveSetting(x => x.SkipUnchangedBackups = skipSame.On);
+            Row(list, "Skip backups that haven't changed", "If a quad's settings match its last backup, I won't save another copy. Special backups are always kept.", false, skipSame);
+
             var whenDisconnected = new FaceToggle(s.BackupWhenDisconnected);
             whenDisconnected.Changed += (o, e) => SaveSetting(x => x.BackupWhenDisconnected = whenDisconnected.On);
             Row(list, "Back up when you disconnect in Betaflight", "Hit Disconnect with the quad still plugged in and I'll save that session's tune. Only kept if something changed. Also covers closing Betaflight.", false, whenDisconnected);
@@ -558,6 +564,28 @@ namespace QuadBackup
             var whenClosed = new FaceToggle(s.BackupWhenBetaflightCloses);
             whenClosed.Changed += (o, e) => SaveSetting(x => x.BackupWhenBetaflightCloses = whenClosed.On);
             Row(list, "Back up when Betaflight closes", "For when disconnect backups are off: close Betaflight with the quad still plugged in to save that session's tune.", false, whenClosed);
+
+            Section(list, "TURNED-OFF DRONES");
+            var db = DroneDb.Load();
+            var paused = db.Drones.Where(d => d.Ignored).ToList();
+            if (paused.Count == 0 && db.Forgotten.Count == 0)
+                Row(list, "None right now", "Every drone you've plugged in is on patrol. Drones you set to \"never back up\" or Forget show up here, so you can bring them back.", false);
+            foreach (var d in paused)
+            {
+                var drone = d;
+                var on = new PillButton("Back up again", PillButton.Kind.Secondary, 132, 36);
+                on.Click += (o, e) => { DroneDb.Unpause(drone.FcId); ShowPage(Page.Settings); };
+                Row(list, DroneTitle(drone), "Set to never back up" + DroneDetails(drone) +
+                    (string.IsNullOrEmpty(drone.Folder) ? ". I'll ask where to save it next time it's plugged in." : "."), false, on);
+            }
+            foreach (var d in db.Forgotten)
+            {
+                var drone = d;
+                var restore = new PillButton("Restore", PillButton.Kind.Secondary, 104, 36);
+                restore.Click += (o, e) => { DroneDb.Restore(drone.FcId); ShowPage(Page.Settings); };
+                Row(list, DroneTitle(drone), "Forgotten" + DroneDetails(drone) +
+                    (!string.IsNullOrEmpty(drone.Folder) ? ". Its backups are still in " + drone.Folder : "."), false, restore);
+            }
 
             Section(list, "BETAFLIGHT");
             var launch = new FaceToggle(s.LaunchBetaflight);
@@ -619,6 +647,17 @@ namespace QuadBackup
             footer.Children.Add(WindowKit.Label("Changes save automatically.", 12.5, Palette.Muted));
             list.Children.Add(footer);
             return new ScrollViewer { Content = list };
+        }
+
+        static string DroneTitle(Drone d)
+        {
+            return !string.IsNullOrEmpty(d.Name) ? d.Name : (!string.IsNullOrEmpty(d.CraftName) ? d.CraftName : (d.Board ?? "Unnamed quad"));
+        }
+
+        static string DroneDetails(Drone d)
+        {
+            var parts = new[] { d.Board, d.Firmware }.Where(x => !string.IsNullOrEmpty(x)).ToList();
+            return parts.Count > 0 ? " · " + string.Join(" · ", parts) : "";
         }
 
         TextBox NumberBox(int value, int min, int max, Action<int> save)

@@ -153,6 +153,7 @@ namespace QuadBackup
         public string BetaflightLaunchPath { get; set; }
         public bool BackupWhenBetaflightCloses { get; set; }
         public bool BackupWhenDisconnected { get; set; }
+        public bool SkipUnchangedBackups { get; set; }
         public int DisconnectWaitSeconds { get; set; }
         public bool ShowNotifications { get; set; }
         public string CliCommand { get; set; }
@@ -167,6 +168,8 @@ namespace QuadBackup
             BetaflightLaunchPath = "";
             BackupWhenBetaflightCloses = true;
             BackupWhenDisconnected = true;
+            // a backup identical to the last one for that quad isn't saved again (special backups always are)
+            SkipUnchangedBackups = true;
             // How long the port must stay free, without the quad rebooting, to count as you clicking Disconnect.
             // After a reboot (Save, CLI, Blackbox, flashing) the wait is at least RebootGraceSeconds instead.
             DisconnectWaitSeconds = 2;
@@ -218,8 +221,11 @@ namespace QuadBackup
     public class DroneDb
     {
         public List<Drone> Drones { get; set; }
+        // Drones you clicked Forget on. Kept (with their folder) so they can be restored from Settings,
+        // and so plugging one back in offers its old folder.
+        public List<Drone> Forgotten { get; set; }
 
-        public DroneDb() { Drones = new List<Drone>(); }
+        public DroneDb() { Drones = new List<Drone>(); Forgotten = new List<Drone>(); }
 
         // The backup worker and the Hangar page both edit drones.json, so every write re-reads the file under a lock
         // and changes only the drone it means to.
@@ -232,7 +238,13 @@ namespace QuadBackup
             catch (Exception ex) { Log.Write("drones.json is invalid: " + ex.Message); }
             if (db == null) db = new DroneDb();
             if (db.Drones == null) db.Drones = new List<Drone>();
+            if (db.Forgotten == null) db.Forgotten = new List<Drone>();
             return db;
+        }
+
+        public Drone FindForgotten(string fcId)
+        {
+            return Forgotten.FirstOrDefault(d => string.Equals(d.FcId, fcId, StringComparison.OrdinalIgnoreCase));
         }
 
         public Drone Find(string fcId)
@@ -267,12 +279,45 @@ namespace QuadBackup
                 int i = db.Drones.FindIndex(d => string.Equals(d.FcId, drone.FcId, StringComparison.OrdinalIgnoreCase));
                 if (i >= 0) db.Drones[i] = drone;
                 else db.Drones.Add(drone);
+                db.Forgotten.RemoveAll(d => string.Equals(d.FcId, drone.FcId, StringComparison.OrdinalIgnoreCase));
             });
         }
 
+        // "Forget": out of the Hangar, but remembered so it can be restored.
         public static void Remove(string fcId)
         {
-            Mutate(db => db.Drones.RemoveAll(d => string.Equals(d.FcId, fcId, StringComparison.OrdinalIgnoreCase)));
+            Mutate(db =>
+            {
+                foreach (var d in db.Drones.Where(d => string.Equals(d.FcId, fcId, StringComparison.OrdinalIgnoreCase)).ToList())
+                {
+                    db.Forgotten.RemoveAll(f => string.Equals(f.FcId, fcId, StringComparison.OrdinalIgnoreCase));
+                    db.Forgotten.Add(d);
+                }
+                db.Drones.RemoveAll(d => string.Equals(d.FcId, fcId, StringComparison.OrdinalIgnoreCase));
+            });
+        }
+
+        // Brings a forgotten drone back into the Hangar with its old folder.
+        public static void Restore(string fcId)
+        {
+            Mutate(db =>
+            {
+                var d = db.FindForgotten(fcId);
+                if (d == null) return;
+                db.Forgotten.Remove(d);
+                d.Ignored = false;
+                if (db.Find(fcId) == null) db.Drones.Add(d);
+            });
+        }
+
+        // Turns backups back on for a drone set to "never" / paused.
+        public static void Unpause(string fcId)
+        {
+            Mutate(db =>
+            {
+                var d = db.Find(fcId);
+                if (d != null) d.Ignored = false;
+            });
         }
     }
 
@@ -313,7 +358,7 @@ namespace QuadBackup
 
     public enum ToastKind { Success, Info, Warning, Error, Special }
 
-    public enum DroneMood { New, NewFlightController, MissingFolder }
+    public enum DroneMood { New, NewFlightController, MissingFolder, Returning }
 
     public class NewDroneChoice
     {

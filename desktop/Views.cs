@@ -439,6 +439,10 @@ namespace QuadBackup
                     head = "Is that you, " + suggestedName + "?";
                     sub = "Same name, new flight controller. Keep the name to add to its history.";
                     break;
+                case DroneMood.Returning:
+                    head = "Welcome back, " + suggestedName + "!";
+                    sub = "You forgot me, but I kept my folder. Keep the name to pick up where we left off.";
+                    break;
                 case DroneMood.MissingFolder:
                     head = "Hey, where'd my folder go?";
                     sub = suggestedName + "'s backup folder vanished. Let's give it a new one.";

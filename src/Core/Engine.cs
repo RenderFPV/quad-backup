@@ -490,13 +490,14 @@ namespace QuadBackup
             drone.Board = b.Board;
             drone.Firmware = b.Firmware;
 
-            // end-of-session backups (disconnect / Betaflight closed) are only kept if the tune actually changed;
-            // special backups are always kept
-            if (specialName == null && (kind == JobKind.BetaflightClosed || kind == JobKind.Disconnected) && BackupFiles.SameAsLatest(drone.Folder, b.Cli))
+            // A copy identical to the last backup isn't saved again (with SkipUnchangedBackups on, which is the default;
+            // end-of-session backups always skip). Special backups are always kept.
+            bool skipIfSame = settings.SkipUnchangedBackups || kind == JobKind.BetaflightClosed || kind == JobKind.Disconnected;
+            if (specialName == null && skipIfSame && BackupFiles.SameAsLatest(drone.Folder, b.Cli))
             {
                 Log.Write(port + ": " + drone.Name + " unchanged since last backup");
                 DroneDb.Upsert(drone);
-                Notify(ToastKind.Info, drone.Name + ": nothing new", "No changes since the last backup, so I didn't save another copy.", drone.Folder);
+                Notify(ToastKind.Info, drone.Name + ": nothing new", "Same as the last backup, so I didn't save another copy.", drone.Folder);
                 return Outcome.Saved;
             }
 
@@ -518,7 +519,15 @@ namespace QuadBackup
             string name, location, note = null;
             var mood = DroneMood.New;
             var sameName = known == null ? db.FindByCraftName(b.CraftName) : null;
-            if (known != null && !string.IsNullOrEmpty(known.Folder))
+            var forgotten = known == null ? db.FindForgotten(b.FcId) : null;
+            if (forgotten != null && !string.IsNullOrEmpty(forgotten.Folder))
+            {
+                // you clicked Forget on this one earlier; offer its old folder back
+                name = Path.GetFileName(forgotten.Folder.TrimEnd('\\', '/'));
+                location = Path.GetDirectoryName(forgotten.Folder.TrimEnd('\\', '/'));
+                mood = DroneMood.Returning;
+            }
+            else if (known != null && !string.IsNullOrEmpty(known.Folder))
             {
                 name = known.Name;
                 location = Path.GetDirectoryName(known.Folder);
