@@ -275,33 +275,6 @@ namespace QuadBackup
         }
     }
 
-    static class Quips
-    {
-        static readonly Random Rnd = new Random();
-        static readonly string[] Saved =
-        {
-            "Tune secured. Go send it.",
-            "Your PIDs are safe with me.",
-            "Saved! Now crash responsibly.",
-            "Filed away in the hangar.",
-            "Snapshot taken. Rip that gap.",
-            "Backed up. Props on, fear off.",
-            "Safe and sound. Unlike your props.",
-        };
-
-        public static string ForSave() { return Saved[Rnd.Next(Saved.Length)]; }
-
-        static readonly string[] SpecialSaved =
-        {
-            "Framed and hung on the hangar wall.",
-            "Hall of fame material.",
-            "This one's a keeper.",
-            "Saved with extra sparkle.",
-            "Certified banger tune.",
-        };
-
-        public static string ForSpecial() { return SpecialSaved[Rnd.Next(SpecialSaved.Length)]; }
-    }
 
     // ------------------------------------------------------------------------------------------------ scenery
 
@@ -540,14 +513,6 @@ namespace QuadBackup
     }
 
     // ------------------------------------------------------------------------------------------------ new drone window
-
-    public class NewDroneChoice
-    {
-        public bool Never;
-        public string Folder;
-    }
-
-    public enum DroneMood { New, NewFlightController, MissingFolder }
 
     public class NewDroneForm : Form
     {
@@ -973,8 +938,6 @@ namespace QuadBackup
     }
 
     // ------------------------------------------------------------------------------------------------ pop-up notifications
-
-    public enum ToastKind { Success, Info, Warning, Error, Special }
 
     public class Toast : Form
     {
