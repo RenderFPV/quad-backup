@@ -1,6 +1,6 @@
 [package]
 name = "quad-backup"
-version = "0.2.0"
+version = "2.0.0"
 edition = "2021"
 description = "Backs up Betaflight flight controllers when they're plugged in, then opens Betaflight"
 build = "build.rs"
