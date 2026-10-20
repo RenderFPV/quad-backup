@@ -4,47 +4,46 @@ Backs up a Betaflight flight controller every time you plug it in over USB, then
 
 > **Built with AI.** I came up with the idea and tested it on my own quads, but the code was written by Claude, Anthropic's AI, using Claude Code. I'm a pilot, not a programmer, so if something's broken, an issue describing what happened will get further than asking me how the code works.
 
-## Download
+This is the **Rust version**: one small exe with nothing to install. Releases v1.0.0 and v1.1.0 were the original C# version, and their code is still in this repo's history under those tags.
 
-Grab the latest build from the **[Releases page](../../releases)**.
+| | Status |
+|---|---|
+| **Windows** | Tested on my own quads |
+| **Mac** (Apple Silicon and Intel) | ⚠️ **Experimental, untested.** Build it with one script (below) |
+| **Linux** (x64) | ⚠️ **Experimental, untested** |
 
-| | File | Status |
-|---|---|---|
-| **Windows** | `QuadBackup-Windows.zip` | Tested on my own quads |
-| **Mac** (M1/M2/M3/M4) | `QuadBackup-macOS-AppleSilicon.zip` | ⚠️ **Experimental, untested** |
-| **Mac** (Intel) | `QuadBackup-macOS-Intel.zip` | ⚠️ **Experimental, untested** |
-| **Linux** (x64) | `QuadBackup-linux-x64.tar.gz` | ⚠️ **Experimental, untested** |
+The Mac and Linux versions share all the backup logic with the Windows one and pass the same simulated plug-in, disconnect and special-backup tests. But nobody has plugged a real quad into them yet. If you try one, an issue saying whether it worked is gold.
 
-The Mac and Linux versions share all the backup logic with the Windows one, and they pass the same simulated plug-in, disconnect and special-backup tests. But they haven't been run with a real quad yet. If you try one, an issue saying whether it worked is gold.
+## Getting it
 
 ### Windows
 
-Unzip it anywhere you like and run `QuadBackup.exe`. It starts with Windows from then on, and its settings and drone list live next to the exe.
+Grab `QuadBackup.exe` from the **[Releases page](../../releases)** (or build it, below), put it in a folder of its own and run it. It starts with Windows from then on, and its settings, drone list and backups live next to the exe.
 
 ### Mac (experimental)
 
-1. Unzip it and drag **Quad Backup.app** into **Applications**.
-2. The app isn't signed with an Apple developer account, so macOS won't open it as-is. Open **Terminal** and run these two lines once:
-   ```bash
-   xattr -cr "/Applications/Quad Backup.app"
-   ```
-   ```bash
-   codesign --force --deep --sign - "/Applications/Quad Backup.app"
-   ```
-3. Open **Quad Backup**. It lives in the **menu bar** (top right), not the Dock. Click the little quad for the menu.
+A Mac app has to be built on a Mac. Download this repo (**Code → Download ZIP**), unzip it, open **Terminal** in that folder and run:
 
-Settings and the drone list are in `~/Library/Application Support/Quad Backup/`. Backups go to `~/Documents/Quad Backups/` by default. It starts at login, which you can turn off in Settings.
+```bash
+bash mac/build-mac.sh
+```
+
+It installs Apple's command line tools and Rust if they're missing, then makes `dist/Quad Backup Rust.app`, which runs on both Apple Silicon and Intel. Drag it into **Applications** and open it. It lives in the **menu bar** (top right), not the Dock.
+
+Settings and the drone list are in `~/Library/Application Support/Quad Backup Rust/`. Backups go to `~/Documents/Quad Backups/` by default.
 
 ### Linux (experimental)
 
+Build it with `bash linux/build-linux.sh` (it installs Rust if needed and packs `dist/QuadBackup-rust-linux-x64.tar.gz`), then:
+
 ```bash
-tar xzf QuadBackup-linux-x64.tar.gz
+tar xzf QuadBackup-rust-linux-x64.tar.gz
 ```
 ```bash
-./quad-backup/QuadBackup
+./QuadBackup-rust-linux-x64/QuadBackup
 ```
 
-Your user needs permission to use USB serial devices: `sudo usermod -aG dialout $USER` (Arch: `uucp`), then log out and back in. The tray icon needs a desktop with tray support; on GNOME, install the AppIndicator extension. Without a tray, run the app again to open its window. See `README.txt` in the download for more.
+Your user needs permission to use USB serial devices: `sudo usermod -aG dialout $USER` (Arch: `uucp`), then log out and back in. The tray icon needs a desktop with tray support; on GNOME, install the AppIndicator extension. Without a tray, run the app again to open its window. Settings live in `~/.config/quad-backup-rust/`. See `linux/README.txt` for more.
 
 ## What happens when you plug in a drone
 
@@ -89,10 +88,10 @@ The window has three pages:
 - **Settings:** changes save as soon as you make them.
   - **Backups folder:** where new drone folders are created. Point it at a OneDrive, iCloud or Google Drive folder to keep backups off this computer.
   - **Backup command:** `diff all` (default) or `dump all`.
-  - **Skip backups that haven't changed** (on by default)
-  - **Turned-off drones:** drones you set to "never back up" or forgot. **Back up again** or **Restore** brings each one back. A restored drone keeps its old folder.
   - **Firmware to back up:** Betaflight, INAV and/or Emuflight.
+  - **Skip backups that haven't changed** (on by default)
   - **Back up when you disconnect in Betaflight** and **Back up when Betaflight closes**
+  - **Turned-off drones:** drones you set to "never back up" or forgot. **Back up again** or **Restore** brings each one back. A restored drone keeps its old folder.
   - **Open Betaflight after a backup**, and which Betaflight app to open.
   - **Pop-up notifications** (with a test button)
   - **Start with Windows / at login:** it starts quietly in the tray or menu bar.
@@ -101,7 +100,31 @@ The window has three pages:
 
 ## Building from source
 
-The code is in three parts:
-- `src/Core/`: shared by every platform. It covers talking to the flight controller (`FcReader.cs`), deciding when to back up (`Engine.cs`), and settings, the drone list and backup files (`Common.cs`).
-- `src/Windows/`: the Windows app (tray, windows, Win32 serial). Build it with `build.cmd`, which uses the C# compiler that comes with Windows, so there's nothing to install. Exit Quad Backup from the tray first.
-- `desktop/`: the Mac/Linux app, built with [Avalonia](https://avaloniaui.net/). It needs the [.NET 8 SDK](https://dotnet.microsoft.com/download). `python desktop/package.py` builds all the Mac and Linux downloads into `desktop/dist/`.
+You need [Rust](https://rustup.rs). On Windows you also need the Visual Studio C++ build tools.
+
+```bash
+cargo build --release
+```
+
+The Windows exe is `target/release/QuadBackup.exe`, about 7 MB. Copy it into a folder of its own (for example `dist/`) and run it from there, since it keeps its data next to itself. The Mac and Linux builds have their own scripts, described above.
+
+How the code is laid out:
+
+| | |
+|---|---|
+| `src/core/store.rs` | Settings, the drone list and backup files. |
+| `src/core/fc.rs` | Talking to the flight controller: the MSP check, CLI `diff all` and `exit noreboot`. Also a simulated FC for tests. |
+| `src/core/engine.rs` | Decides when to back up: plug-ins, reboots, disconnects, special backups, skipping unchanged copies, forgotten and paused drones. |
+| `src/platform/` | The operating-system pieces: serial ports and USB vendor IDs, spotting whether Betaflight has a port, launching Betaflight, start at login, single instance. `windows.rs` for Windows, `posix.rs` for Mac and Linux. |
+| `src/ui/` | Everything on screen, drawn with [egui](https://github.com/emilk/egui): the mascot, the Hangar / Settings / Flight log window, the new-drone window, pop-ups, dialogs and the tray / menu bar icon. |
+| `mac/`, `linux/` | Build scripts for those platforms. |
+
+### Tests
+
+```bash
+cargo test --release
+```
+
+One of the tests replays whole sessions against a simulated flight controller: plug-ins, a quick replug, an old-firmware reboot, disconnects with and without changes, a reboot after Save, special backups while connected and while free, Back up now, Forget and restore, and Never then resume.
+
+To look at a screen without a quad (it never starts the backup engine or touches a port), set `QB_DEMO` to one of `hangar`, `settings`, `log`, `drone`, `toasts` or `special`, and optionally `QB_DATA_DIR` to a folder with a copy of your data.

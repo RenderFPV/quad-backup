@@ -1,17 +1,16 @@
-# Built app - run build.cmd to make it
-QuadBackup.exe
+# Build output
+/target/
+/dist/
 
-# Personal data the app creates when it runs
+# Personal data the app creates when it runs (next to the exe, so normally inside dist/)
 settings.json
 drones.json
 QuadBackup.log
 QuadBackup.log.old
 *.tmp
 Backups/
-
-# Mac/Linux build output
-desktop/bin/
-desktop/obj/
-desktop/dist/
 show.signal
+instance.lock
 
+# The original C# version, kept locally (its code is in git history up to v1.1.0)
+/original/
