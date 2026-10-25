@@ -725,7 +725,8 @@ mod tests {
         // 1. brand-new quad plugged in, Betaflight closed
         platform.plug("COM9", &dev);
         assert!(wait_for(|| n() == 1, 8000), "new quad -> asked for a folder and backed up");
-        assert!(ui.asks() == 1 && ui.count("Success") == 1);
+        // the pop-up follows the file write, so give it a moment on a busy machine
+        assert!(wait_for(|| ui.asks() == 1 && ui.count("Success") == 1, 2000));
         assert!(wait_for(|| *platform.launches.lock().unwrap() == 1, 2000), "Betaflight launched after the plug-in backup");
 
         // 2. quick replug, same settings -> checked, no duplicate file; changed settings -> new file
