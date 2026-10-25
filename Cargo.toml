@@ -15,7 +15,8 @@ serde_json = "=1.0.140"
 regex = "=1.11.1"
 chrono = { version = "=0.4.40", default-features = false, features = ["clock"] }
 serialport = { version = "=4.6.1", default-features = false }
-eframe = "=0.31.1"
+# wgpu (Direct3D / Metal / Vulkan) rather than OpenGL: OpenGL crashed when Windows went to sleep
+eframe = { version = "=0.31.1", default-features = false, features = ["accesskit", "default_fonts", "wgpu", "wayland", "x11"] }
 tiny-skia = "=0.11.4"
 
 # Windows: Win32 APIs, the registry, a tray icon, native folder pickers

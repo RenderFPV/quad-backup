@@ -296,7 +296,8 @@ fn show_signal() -> PathBuf { store::data_dir().join("show.signal") }
 
 /// An exclusive lock on a file in the data folder marks "the" running copy. A second copy drops a signal file
 /// that the first one notices and opens its window.
-pub fn claim_instance() -> Claim {
+/// `wake_running`: if another copy already has it, ask that copy to open its window.
+pub fn claim_instance(wake_running: bool) -> Claim {
     let path = store::data_dir().join("instance.lock");
     let Ok(file) = fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path) else {
         return Claim::First(Instance { _lock: fs::File::open("/dev/null").unwrap() });
@@ -306,7 +307,9 @@ pub fn claim_instance() -> Claim {
         let _ = fs::remove_file(show_signal());
         Claim::First(Instance { _lock: file })
     } else {
-        let _ = fs::write(show_signal(), "");
+        if wake_running {
+            let _ = fs::write(show_signal(), "");
+        }
         Claim::AlreadyRunning
     }
 }

@@ -7,6 +7,7 @@ mod ui;
 mod platform;
 
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 fn main() -> eframe::Result<()> {
     // the C# version and this one would fight over the same quad
@@ -21,11 +22,27 @@ fn main() -> eframe::Result<()> {
         }
         return Ok(());
     }
-    let instance = match platform::claim_instance() {
-        platform::Claim::First(i) => Arc::new(i),
-        platform::Claim::AlreadyRunning => return Ok(()), // the running copy opens its window instead
+    // after a crash the app relaunches itself with --restarted; that copy waits for the old one to finish exiting
+    let restarted = std::env::args().any(|a| a == "--restarted");
+    let Some(instance) = claim_instance(restarted) else {
+        return Ok(()); // the running copy opens its window instead
     };
-    std::panic::set_hook(Box::new(|info| core::store::log(format!("Crashed: {info}"))));
+    let instance = Arc::new(instance);
+    let started = Instant::now();
+    std::panic::set_hook(Box::new(move |info| {
+        // A crash anywhere (the window code, the backup engine) would otherwise leave no app, or an app that no longer
+        // backs anything up. So: note it, start a fresh copy quietly in the tray, and get out of its way.
+        core::store::log(format!("Crashed: {info}"));
+        if started.elapsed() < Duration::from_secs(60) {
+            core::store::log("That was less than a minute after starting, so I'm not restarting (to avoid a crash loop)");
+        } else if !demo {
+            match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).args(["--tray", "--restarted"]).spawn()) {
+                Ok(_) => core::store::log("Restarting after the crash"),
+                Err(e) => core::store::log(format!("Couldn't restart after the crash: {e}")),
+            }
+        }
+        std::process::exit(1);
+    }));
     // starting at login passes --tray so the window doesn't pop up every time
     let show_window = !std::env::args().any(|a| a == "--tray");
 
@@ -45,4 +62,22 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native("Quad Backup", options, Box::new(move |cc| Ok(Box::new(ui::app::App::new(cc, instance, show_window)))))
+}
+
+/// Takes the single-instance lock. Normally it gives up at once (poking the running copy to open its window); after a
+/// crash restart it waits up to 20 s for the old copy to exit instead.
+fn claim_instance(restarted: bool) -> Option<platform::Instance> {
+    let deadline = Instant::now() + Duration::from_secs(if restarted { 20 } else { 0 });
+    loop {
+        match platform::claim_instance(!restarted) {
+            platform::Claim::First(i) => return Some(i),
+            platform::Claim::AlreadyRunning if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(250)),
+            platform::Claim::AlreadyRunning => {
+                if restarted {
+                    core::store::log("The old copy didn't exit after its crash, so this restart gave up");
+                }
+                return None;
+            }
+        }
+    }
 }

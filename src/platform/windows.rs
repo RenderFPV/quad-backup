@@ -265,7 +265,8 @@ pub enum Claim {
 }
 
 /// Claims "the" running copy. A second copy just pokes the first to open its window.
-pub fn claim_instance() -> Claim {
+/// `wake_running`: if another copy already has it, ask that copy to open its window.
+pub fn claim_instance(wake_running: bool) -> Claim {
     unsafe {
         // demo copies get their own names, so they never poke the real app
         let tag = if std::env::var_os("QB_DEMO").is_some() { "QuadBackupRust.Demo" } else { "QuadBackupRust" };
@@ -273,7 +274,12 @@ pub fn claim_instance() -> Claim {
         let already = GetLastError() == ERROR_ALREADY_EXISTS;
         let show = CreateEventW(std::ptr::null(), 0, 0, wide(&format!("{tag}.ShowWindow")).as_ptr());
         if already {
-            SetEvent(show);
+            if wake_running {
+                SetEvent(show);
+            }
+            // let go of our handles, or they'd keep the name taken after the other copy exits
+            CloseHandle(show);
+            CloseHandle(mutex);
             return Claim::AlreadyRunning;
         }
         Claim::First(Instance { _mutex: mutex, show })
